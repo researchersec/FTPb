@@ -11,3 +11,6 @@ SMTP_PORT = 587  # Adjust according to your SMTP server
 SMTP_USER = "your_email@example.com"
 SMTP_PASSWORD = "your_email_password"
 TO_EMAIL = "recipient@example.com"
+
+# Multithreading Configuration
+NUM_THREADS = 5  # Adjust the number of threads based on your system's capacity
