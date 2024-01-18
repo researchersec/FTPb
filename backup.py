@@ -2,10 +2,11 @@ import hashlib
 from ftplib import FTP
 import os
 import smtplib
+from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import FTP_HOST, FTP_USER, FTP_PASSWORD, REMOTE_DIRECTORY, LOCAL_BACKUP_DIRECTORY, \
-    SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, TO_EMAIL
+    SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, TO_EMAIL, NUM_THREADS
 
 def calculate_file_hash(file_path, hash_algorithm="md5"):
     """Calculate the hash of a file."""
@@ -29,8 +30,23 @@ def send_email(subject, body, to_email, smtp_server, smtp_port, smtp_user, smtp_
         server.login(smtp_user, smtp_password)
         server.sendmail(smtp_user, to_email, msg.as_string())
 
+def process_file(file_name, remote_directory, local_backup_directory, ftp):
+    remote_file_path = os.path.join(remote_directory, file_name)
+    local_file_path = os.path.join(local_backup_directory, file_name)
+
+    with open(local_file_path, 'wb') as local_file:
+        ftp.retrbinary(f"RETR {file_name}", local_file.write)
+
+    # Calculate hash for both remote and local files
+    remote_file_hash = ftp.sendcmd(f"MD5 {file_name}").split(' ')[-1].strip()
+    local_file_hash = calculate_file_hash(local_file_path)
+
+    # Verify if the hash values match
+    if remote_file_hash != local_file_hash:
+        raise Exception(f"Verification failed for file: {file_name}")
+
 def backup_ftp_files(ftp_host, ftp_user, ftp_password, remote_directory, local_backup_directory,
-                     smtp_server, smtp_port, smtp_user, smtp_password, to_email):
+                     smtp_server, smtp_port, smtp_user, smtp_password, to_email, num_threads):
     try:
         # Connect to FTP server
         ftp = FTP(ftp_host)
@@ -46,21 +62,16 @@ def backup_ftp_files(ftp_host, ftp_user, ftp_password, remote_directory, local_b
         if not os.path.exists(local_backup_directory):
             os.makedirs(local_backup_directory)
 
-        # Download each file from the FTP server
-        for file_name in file_list:
-            remote_file_path = os.path.join(remote_directory, file_name)
-            local_file_path = os.path.join(local_backup_directory, file_name)
-            
-            with open(local_file_path, 'wb') as local_file:
-                ftp.retrbinary(f"RETR {file_name}", local_file.write)
+        # Process files using multithreading
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = []
+            for file_name in file_list:
+                future = executor.submit(process_file, file_name, remote_directory, local_backup_directory, ftp)
+                futures.append(future)
 
-            # Calculate hash for both remote and local files
-            remote_file_hash = ftp.sendcmd(f"MD5 {file_name}").split(' ')[-1].strip()
-            local_file_hash = calculate_file_hash(local_file_path)
-
-            # Verify if the hash values match
-            if remote_file_hash != local_file_hash:
-                raise Exception(f"Verification failed for file: {file_name}")
+            # Wait for all threads to complete
+            for future in futures:
+                future.result()
 
         # Close the FTP connection
         ftp.quit()
@@ -78,4 +89,4 @@ def backup_ftp_files(ftp_host, ftp_user, ftp_password, remote_directory, local_b
 
 if __name__ == "__main__":
     backup_ftp_files(FTP_HOST, FTP_USER, FTP_PASSWORD, REMOTE_DIRECTORY, LOCAL_BACKUP_DIRECTORY,
-                     SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, TO_EMAIL)
+                     SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, TO_EMAIL, NUM_THREADS)
